@@ -122,7 +122,7 @@ export class AuthService {
       );
       if (isMatch) {
         isValidToken = true;
-        await this.prisma.refreshToken.delete({
+        await this.prisma.refreshToken.deleteMany({
           where: { id: storedToken.id },
         });
         break;
