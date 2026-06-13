@@ -6,12 +6,21 @@ datasource db {
   provider = "postgresql"
 }
 
+enum Role {
+  SUPERADMIN
+  ADMIN
+  HOD
+  LEAD
+  ASSOCIATE
+}
+
 model User {
   id            String         @id @default(cuid())
   firstName     String
   lastName      String
   email         String         @unique
   passwordHash  String
+  role          Role           @default(ASSOCIATE)
   isActive      Boolean        @default(true)
   profileImage  String?
   createdAt     DateTime       @default(now())

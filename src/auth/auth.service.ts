@@ -41,13 +41,14 @@ export class AuthService {
         firstName: true,
         lastName: true,
         email: true,
+        role: true,
         isActive: true,
         profileImage: true,
         createdAt: true,
       },
     });
 
-    const tokens = await this.generateTokens(user.id, user.email);
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.storeRefreshToken(user.id, tokens.refreshToken);
 
     return {
@@ -78,7 +79,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email);
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.storeRefreshToken(user.id, tokens.refreshToken);
 
     return {
@@ -87,6 +88,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
+        role: user.role,
         isActive: user.isActive,
         profileImage: user.profileImage,
       },
@@ -133,7 +135,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    const tokens = await this.generateTokens(user.id, user.email);
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.storeRefreshToken(user.id, tokens.refreshToken);
 
     return tokens;
@@ -147,8 +149,8 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
-  private async generateTokens(userId: string, email: string) {
-    const payload = { sub: userId, email };
+  private async generateTokens(userId: string, email: string, role: any) {
+    const payload = { sub: userId, email, role };
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
@@ -189,6 +191,7 @@ export class AuthService {
         firstName: true,
         lastName: true,
         email: true,
+        role: true,
         isActive: true,
         profileImage: true,
       },
