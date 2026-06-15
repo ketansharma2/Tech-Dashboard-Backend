@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RbacModule } from './rbac/rbac.module';
+import { TasksModule } from './tasks/tasks.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { RbacModule } from './rbac/rbac.module';
     PrismaModule,
     AuthModule,
     RbacModule,
+    TasksModule,
   ],
   controllers: [AppController],
   providers: [

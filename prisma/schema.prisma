@@ -26,6 +26,11 @@ model User {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   refreshTokens RefreshToken[]
+  
+  // Task relations
+  createdTasks  Task[]        @relation("TaskCreator")
+  assignedTasks Task[]        @relation("TaskAssignee")
+  taskComments  TaskComment[] @relation("TaskCommentAuthor")
 
   @@map("users")
 }
@@ -41,4 +46,110 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(TODO)
+  isCompleted Boolean      @default(false)
+  isImportant Boolean      @default(false)
+  isMyDay     Boolean      @default(false)
+  
+  // Dates
+  dueDate     DateTime?
+  dueTime     String?
+  reminderAt  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  // Relations
+  creatorId   String
+  creator     User         @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  assigneeId  String?
+  assignee    User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  
+  // Meeting related
+  isMeeting         Boolean  @default(false)
+  meetingUrl        String?
+  meetingStartTime  String?
+  meetingEndTime    String?
+  
+  // Tags (stored as JSON array)
+  tags      String[] @default([])
+  
+  // Nested relations
+  steps       TaskStep[]
+  attachments TaskAttachment[]
+  comments    TaskComment[]
+  
+  @@index([creatorId])
+  @@index([assigneeId])
+  @@index([isMyDay])
+  @@index([isImportant])
+  @@index([isCompleted])
+  @@index([dueDate])
+  @@index([status])
+  @@index([priority])
+  @@map("tasks")
+}
+
+model TaskStep {
+  id          String   @id @default(cuid())
+  title       String
+  isCompleted Boolean  @default(false)
+  order       Int
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([taskId])
+  @@map("task_steps")
+}
+
+model TaskAttachment {
+  id         String   @id @default(cuid())
+  fileName   String
+  fileUrl    String
+  fileSize   Int
+  fileType   String
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedAt DateTime @default(now())
+  
+  @@index([taskId])
+  @@map("task_attachments")
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  content   String
+  authorId  String
+  author    User     @relation("TaskCommentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([taskId])
+  @@index([authorId])
+  @@map("task_comments")
 }

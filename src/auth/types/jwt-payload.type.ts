@@ -20,7 +20,7 @@ export interface JwtPayload {
  * Type for user object extracted from JWT and attached to request
  */
 export interface UserFromJwt {
-  id: string;
+  userId: string;
   email: string;
   role: Role;
 }

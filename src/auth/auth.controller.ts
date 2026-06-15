@@ -39,17 +39,17 @@ export class AuthController {
     @CurrentUser() user: any,
     @Body() dto: RefreshTokenDto,
   ) {
-    return this.authService.refreshTokens(user.id, dto.refreshToken);
+    return this.authService.refreshTokens(user.userId, dto.refreshToken);
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   async logout(@CurrentUser() user: any) {
-    return this.authService.logout(user.id);
+    return this.authService.logout(user.userId);
   }
 
   @Get('me')
   async getProfile(@CurrentUser() user: any) {
-    return this.authService.validateUser(user.id);
+    return this.authService.validateUser(user.userId);
   }
 }
