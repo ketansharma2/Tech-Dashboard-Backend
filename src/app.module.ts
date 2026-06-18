@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RbacModule } from './rbac/rbac.module';
 import { TasksModule } from './tasks/tasks.module';
+import { AuditModule } from './audit/audit.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { TasksModule } from './tasks/tasks.module';
     AuthModule,
     RbacModule,
     TasksModule,
+    AuditModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [
