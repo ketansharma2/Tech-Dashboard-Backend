@@ -6,8 +6,17 @@ import {
   HttpStatus,
   UseGuards,
   Get,
+  Req,
 } from '@nestjs/common';
-import { AuthService } from './auth.service';
+import { AuthService, RequestContext } from './auth.service';
+
+function requestContext(req: any): RequestContext {
+  const forwarded = (req?.headers?.['x-forwarded-for'] as string) || '';
+  return {
+    ipAddress: forwarded.split(',')[0]?.trim() || req?.ip || null,
+    userAgent: (req?.headers?.['user-agent'] as string) || null,
+  };
+}
 import { RegisterDto, LoginDto, RefreshTokenDto } from './dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -27,8 +36,8 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  async login(@Body() dto: LoginDto, @Req() req: any) {
+    return this.authService.login(dto, requestContext(req));
   }
 
   @Public()
@@ -44,12 +53,17 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@CurrentUser() user: any) {
-    return this.authService.logout(user.userId);
+  async logout(@CurrentUser() user: any, @Req() req: any) {
+    return this.authService.logout(user.userId, requestContext(req));
   }
 
   @Get('me')
   async getProfile(@CurrentUser() user: any) {
-    return this.authService.validateUser(user.userId);
+    return this.authService.getMe(user.userId);
+  }
+
+  @Get('permissions')
+  async getPermissions(@CurrentUser() user: any) {
+    return this.authService.getEffectivePermissions(user.userId);
   }
 }

@@ -10,6 +10,10 @@ import { RbacModule } from './rbac/rbac.module';
 import { TasksModule } from './tasks/tasks.module';
 import { AuditModule } from './audit/audit.module';
 import { UsersModule } from './users/users.module';
+import { AuthzModule } from './authz/authz.module';
+import { RolesModule } from './roles/roles.module';
+import { PermissionsModule } from './permissions/permissions.module';
+import { AssistantsModule } from './assistants/assistants.module';
 
 @Module({
   imports: [
@@ -17,11 +21,15 @@ import { UsersModule } from './users/users.module';
       isGlobal: true,
     }),
     PrismaModule,
+    AuthzModule,
     AuthModule,
     RbacModule,
     TasksModule,
     AuditModule,
     UsersModule,
+    RolesModule,
+    PermissionsModule,
+    AssistantsModule,
   ],
   controllers: [AppController],
   providers: [

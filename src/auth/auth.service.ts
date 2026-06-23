@@ -9,6 +9,14 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto, LoginDto } from './dto';
+import { PermissionResolverService } from '../authz/permission-resolver.service';
+import { AuditService } from '../audit/audit.service';
+import { AUDIT, ENTITY } from '../audit/audit-actions';
+
+export interface RequestContext {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
 
 @Injectable()
 export class AuthService {
@@ -16,6 +24,8 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private permissionResolver: PermissionResolverService,
+    private audit: AuditService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -57,7 +67,7 @@ export class AuthService {
     };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ctx?: RequestContext) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
@@ -76,11 +86,21 @@ export class AuthService {
     );
 
     if (!isPasswordValid) {
+      await this.audit.recordLogin(user.id, 'FAILED', ctx);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.storeRefreshToken(user.id, tokens.refreshToken);
+
+    await this.audit.recordLogin(user.id, 'LOGIN', ctx);
+    await this.audit.log({
+      action: AUDIT.AUTH_LOGIN,
+      actorId: user.id,
+      entityType: ENTITY.AUTH,
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
+    });
 
     return {
       user: {
@@ -141,9 +161,18 @@ export class AuthService {
     return tokens;
   }
 
-  async logout(userId: string) {
+  async logout(userId: string, ctx?: RequestContext) {
     await this.prisma.refreshToken.deleteMany({
       where: { userId },
+    });
+
+    await this.audit.recordLogin(userId, 'LOGOUT', ctx);
+    await this.audit.log({
+      action: AUDIT.AUTH_LOGOUT,
+      actorId: userId,
+      entityType: ENTITY.AUTH,
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent,
     });
 
     return { message: 'Logged out successfully' };
@@ -202,5 +231,48 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  /**
+   * Full identity for the frontend: profile + dynamic role + delegation context
+   * + the caller's EFFECTIVE permission keys (used for UI gating).
+   */
+  async getMe(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        role: true,
+        roleId: true,
+        isActive: true,
+        profileImage: true,
+        principalId: true,
+        roleRef: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    const permissions = await this.permissionResolver.getEffectivePermissionList(
+      userId,
+    );
+
+    return {
+      ...user,
+      isAssistant: !!user.principalId,
+      permissions,
+    };
+  }
+
+  /** Lightweight endpoint to re-fetch just the effective permission keys. */
+  async getEffectivePermissions(userId: string) {
+    return {
+      permissions: await this.permissionResolver.getEffectivePermissionList(userId),
+    };
   }
 }

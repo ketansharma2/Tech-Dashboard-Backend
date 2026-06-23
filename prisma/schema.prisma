@@ -22,6 +22,80 @@ enum Department {
   OPERATIONS
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic RBAC engine
+// `Role` (enum) is kept as a compatibility seed; authorization is resolved from
+// the dynamic AppRole / Permission / RolePermission / UserPermissionOverride
+// tables via the effective-permission resolver.
+// ---------------------------------------------------------------------------
+
+enum PermissionEffect {
+  GRANT
+  REVOKE
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique // "module.action", e.g. "task.view"
+  module      String // "task"
+  action      String // "view"
+  label       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles     RolePermission[]
+  overrides UserPermissionOverride[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model AppRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  isSystem    Boolean  @default(false) // seeded roles cannot be deleted
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       User[]
+
+  @@index([isActive])
+  @@map("roles")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  role         AppRole    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermissionOverride {
+  id           String           @id @default(cuid())
+  userId       String
+  user         User             @relation("UserPermissionOverrides", fields: [userId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission       @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  effect       PermissionEffect
+  createdAt    DateTime         @default(now())
+
+  @@unique([userId, permissionId])
+  @@index([userId])
+  @@map("user_permission_overrides")
+}
+
 model User {
   id            String         @id @default(cuid())
   firstName     String
@@ -43,6 +117,18 @@ model User {
   manager       User?          @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports       User[]         @relation("UserManager")
 
+  // Dynamic role (additive hybrid; `role` enum above kept for compatibility/seed)
+  roleId        String?
+  roleRef       AppRole?       @relation(fields: [roleId], references: [id], onDelete: SetNull)
+
+  // Delegated assistant: an assistant is a normal user delegated under a principal
+  principalId   String?
+  principal     User?          @relation("UserDelegation", fields: [principalId], references: [id], onDelete: SetNull)
+  assistants    User[]         @relation("UserDelegation")
+
+  // User-level permission overrides (grant / revoke on top of role permissions)
+  permissionOverrides UserPermissionOverride[] @relation("UserPermissionOverrides")
+
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   refreshTokens RefreshToken[]
@@ -52,6 +138,10 @@ model User {
   assignedTasks Task[]        @relation("TaskAssignee")
   taskComments  TaskComment[] @relation("TaskCommentAuthor")
 
+  // Activity
+  lastActiveAt  DateTime?
+  loginEvents   LoginEvent[]  @relation("UserLoginEvents")
+
   // Audit relations
   auditActions  AuditLog[]    @relation("AuditActor")
   auditTargets  AuditLog[]    @relation("AuditTarget")
@@ -59,37 +149,49 @@ model User {
   @@index([department])
   @@index([managerId])
   @@index([role])
+  @@index([roleId])
+  @@index([principalId])
   @@map("users")
 }
 
-enum AuditAction {
-  CREATE_USER
-  UPDATE_USER
-  DELETE_USER
-  ACTIVATE_USER
-  DEACTIVATE_USER
-  RESET_PASSWORD
-  ROLE_CHANGE
-  DEPARTMENT_CHANGE
-  MANAGER_CHANGE
-}
-
+// Enterprise audit log. `action` is a free-form string (e.g. "ROLE_CREATE",
+// "CREATE_USER", "AUTH_LOGIN") so new modules/actions need no schema change.
 model AuditLog {
-  id           String      @id @default(cuid())
-  action       AuditAction
+  id           String   @id @default(cuid())
+  action       String
+  entityType   String? // "user" | "role" | "assistant" | "permission" | ...
+  entityId     String?
   actorId      String
-  actor        User        @relation("AuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+  actor        User     @relation("AuditActor", fields: [actorId], references: [id], onDelete: Cascade)
   targetUserId String?
-  targetUser   User?       @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
-  // Free-form change details, e.g. { from, to, fields, message }
+  targetUser   User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  oldValues    Json?
+  newValues    Json?
   metadata     Json?
-  createdAt    DateTime    @default(now())
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
 
   @@index([actorId])
   @@index([targetUserId])
   @@index([action])
+  @@index([entityType])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+model LoginEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("UserLoginEvents", fields: [userId], references: [id], onDelete: Cascade)
+  type      String // "LOGIN" | "LOGOUT" | "FAILED"
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("login_events")
 }
 
 model RefreshToken {

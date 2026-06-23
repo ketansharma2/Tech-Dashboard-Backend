@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcrypt';
-import { AuditAction, Department, Prisma, Role } from '@prisma/client';
+import { Department, Prisma, Role } from '@prisma/client';
+import { AUDIT } from '../../audit/audit-actions';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import {
@@ -174,7 +175,7 @@ export class UserActionService {
     });
 
     await this.audit.log({
-      action: AuditAction.CREATE_USER,
+      action: AUDIT.USER_CREATE,
       actorId,
       targetUserId: created.id,
       metadata: { role: targetRole, department, email: created.email },
@@ -196,7 +197,7 @@ export class UserActionService {
     assertCanManageRole(actorRole, target.role);
 
     const data: Prisma.UserUpdateInput = {};
-    const auditEntries: { action: AuditAction; metadata?: Record<string, any> }[] = [];
+    const auditEntries: { action: string; metadata?: Record<string, any> }[] = [];
 
     // Plain profile fields.
     if (payload?.firstName !== undefined) data.firstName = String(payload.firstName).trim();
@@ -226,7 +227,7 @@ export class UserActionService {
         assertCanManageRole(actorRole, nextRole);
         data.role = nextRole;
         auditEntries.push({
-          action: AuditAction.ROLE_CHANGE,
+          action: AUDIT.USER_ROLE_CHANGE,
           metadata: { from: target.role, to: nextRole },
         });
       }
@@ -239,7 +240,7 @@ export class UserActionService {
         assertPermission(actorRole, UserPermission.ASSIGN_DEPARTMENT);
         data.department = nextDept;
         auditEntries.push({
-          action: AuditAction.DEPARTMENT_CHANGE,
+          action: AUDIT.USER_DEPARTMENT_CHANGE,
           metadata: { from: target.department, to: nextDept },
         });
       }
@@ -255,7 +256,7 @@ export class UserActionService {
           ? { connect: { id: nextManager } }
           : { disconnect: true };
         auditEntries.push({
-          action: AuditAction.MANAGER_CHANGE,
+          action: AUDIT.USER_MANAGER_CHANGE,
           metadata: { from: target.managerId, to: nextManager },
         });
       }
@@ -265,7 +266,7 @@ export class UserActionService {
     const updated = await this.sanitized(target.id);
 
     await this.audit.log({
-      action: AuditAction.UPDATE_USER,
+      action: AUDIT.USER_UPDATE,
       actorId,
       targetUserId: target.id,
       metadata: { fields: Object.keys(data) },
@@ -298,7 +299,7 @@ export class UserActionService {
     await this.prisma.user.delete({ where: { id: target.id } });
 
     await this.audit.log({
-      action: AuditAction.DELETE_USER,
+      action: AUDIT.USER_DELETE,
       actorId,
       targetUserId: null, // target row is gone; keep the id in metadata
       metadata: { deletedUserId: target.id, email: target.email, role: target.role },
@@ -335,7 +336,7 @@ export class UserActionService {
     const updated = await this.sanitized(target.id);
 
     await this.audit.log({
-      action: isActive ? AuditAction.ACTIVATE_USER : AuditAction.DEACTIVATE_USER,
+      action: isActive ? AUDIT.USER_ACTIVATE : AUDIT.USER_DEACTIVATE,
       actorId,
       targetUserId: target.id,
     });
@@ -366,7 +367,7 @@ export class UserActionService {
     await this.prisma.refreshToken.deleteMany({ where: { userId: target.id } });
 
     await this.audit.log({
-      action: AuditAction.RESET_PASSWORD,
+      action: AUDIT.USER_RESET_PASSWORD,
       actorId,
       targetUserId: target.id,
     });
@@ -396,7 +397,7 @@ export class UserActionService {
     const updated = await this.sanitized(target.id);
 
     await this.audit.log({
-      action: AuditAction.ROLE_CHANGE,
+      action: AUDIT.USER_ROLE_CHANGE,
       actorId,
       targetUserId: target.id,
       metadata: { from: target.role, to: nextRole },
@@ -424,7 +425,7 @@ export class UserActionService {
     const updated = await this.sanitized(target.id);
 
     await this.audit.log({
-      action: AuditAction.DEPARTMENT_CHANGE,
+      action: AUDIT.USER_DEPARTMENT_CHANGE,
       actorId,
       targetUserId: target.id,
       metadata: { from: target.department, to: department },
@@ -455,7 +456,7 @@ export class UserActionService {
     const updated = await this.sanitized(target.id);
 
     await this.audit.log({
-      action: AuditAction.MANAGER_CHANGE,
+      action: AUDIT.USER_MANAGER_CHANGE,
       actorId,
       targetUserId: target.id,
       metadata: { from: target.managerId, to: nextManager },

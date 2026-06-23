@@ -10,6 +10,12 @@ import { PrismaClient, Role, Department } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcrypt';
+import {
+  buildPermissionCatalog,
+  SYSTEM_ROLES,
+  SYSTEM_ROLE_PERMISSIONS,
+  ASSISTANT_BASE_ROLE,
+} from '../src/authz/permission-registry';
 
 const connectionString = process.env.TECH_DB_CONNECTION_STRING;
 if (!connectionString) {
@@ -49,7 +55,80 @@ const SEED_USERS: SeedUser[] = [
   { key: 'assoc-sales', firstName: 'Nisha', lastName: 'Pillai', email: 'nisha.pillai@maven-erp.com', role: 'ASSOCIATE', department: 'SALES', managerKey: 'lead-sales', jobTitle: 'Account Executive', location: 'Delhi, IN' },
 ];
 
+/**
+ * Seeds the dynamic permission catalog + the system roles (slugs match the
+ * legacy Role enum) and their default permission grants. Idempotent:
+ *  - SUPERADMIN always gets every permission (covers newly added modules).
+ *  - Other system roles get defaults only on first creation, so later edits in
+ *    the Role Management UI are never clobbered by re-running the seed.
+ */
+async function seedRbac(): Promise<Map<string, string>> {
+  console.log('🌱 Seeding permissions...');
+  const catalog = buildPermissionCatalog();
+  for (const p of catalog) {
+    await prisma.permission.upsert({
+      where: { key: p.key },
+      update: { module: p.module, action: p.action, label: p.label },
+      create: { key: p.key, module: p.module, action: p.action, label: p.label },
+    });
+  }
+  const allPerms = await prisma.permission.findMany({ select: { id: true, key: true } });
+  const permIdByKey = new Map(allPerms.map((p) => [p.key, p.id]));
+
+  console.log('🌱 Seeding system roles...');
+  const roleIdBySlug = new Map<string, string>();
+  for (const r of SYSTEM_ROLES) {
+    const role = await prisma.appRole.upsert({
+      where: { slug: r.slug },
+      update: { name: r.name, description: r.description, isSystem: true },
+      create: { slug: r.slug, name: r.name, description: r.description, isSystem: true },
+    });
+    roleIdBySlug.set(r.slug, role.id);
+
+    const spec = SYSTEM_ROLE_PERMISSIONS[r.slug];
+    if (spec === 'ALL') {
+      await prisma.rolePermission.createMany({
+        data: allPerms.map((p) => ({ roleId: role.id, permissionId: p.id })),
+        skipDuplicates: true,
+      });
+    } else {
+      const existing = await prisma.rolePermission.count({ where: { roleId: role.id } });
+      if (existing === 0) {
+        await prisma.rolePermission.createMany({
+          data: spec
+            .map((k) => permIdByKey.get(k))
+            .filter((id): id is string => !!id)
+            .map((permissionId) => ({ roleId: role.id, permissionId })),
+          skipDuplicates: true,
+        });
+      }
+    }
+  }
+  // Zero-permission base role for delegated assistants.
+  await prisma.appRole.upsert({
+    where: { slug: ASSISTANT_BASE_ROLE.slug },
+    update: {
+      name: ASSISTANT_BASE_ROLE.name,
+      description: ASSISTANT_BASE_ROLE.description,
+      isSystem: true,
+    },
+    create: {
+      slug: ASSISTANT_BASE_ROLE.slug,
+      name: ASSISTANT_BASE_ROLE.name,
+      description: ASSISTANT_BASE_ROLE.description,
+      isSystem: true,
+    },
+  });
+
+  console.log(
+    `✅ Seeded ${catalog.length} permissions and ${SYSTEM_ROLES.length + 1} roles.`,
+  );
+  return roleIdBySlug;
+}
+
 async function main() {
+  const roleIdBySlug = await seedRbac();
+
   console.log('🌱 Seeding users...');
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
   const idByKey = new Map<string, string>();
@@ -62,6 +141,7 @@ async function main() {
         firstName: u.firstName,
         lastName: u.lastName,
         role: u.role,
+        roleId: roleIdBySlug.get(u.role),
         department: u.department,
         jobTitle: u.jobTitle,
         location: u.location,
@@ -73,12 +153,21 @@ async function main() {
         email: u.email,
         passwordHash,
         role: u.role,
+        roleId: roleIdBySlug.get(u.role),
         department: u.department,
         jobTitle: u.jobTitle,
         location: u.location,
       },
     });
     idByKey.set(u.key, user.id);
+  }
+
+  // Backfill roleId for any pre-existing users (match dynamic role to enum role).
+  for (const [slug, roleId] of roleIdBySlug) {
+    await prisma.user.updateMany({
+      where: { role: slug as Role, roleId: null },
+      data: { roleId },
+    });
   }
 
   // Second pass: wire up manager relationships now that all IDs exist.

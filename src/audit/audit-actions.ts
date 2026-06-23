@@ -1,0 +1,50 @@
+/**
+ * Canonical audit action keys. Free-form strings (the AuditLog.action column is
+ * a String) so adding new ones needs no schema change. User-* keys intentionally
+ * keep their legacy values so existing activity timelines keep resolving.
+ */
+export const AUDIT = {
+  // Users (legacy values preserved)
+  USER_CREATE: 'CREATE_USER',
+  USER_UPDATE: 'UPDATE_USER',
+  USER_DELETE: 'DELETE_USER',
+  USER_ACTIVATE: 'ACTIVATE_USER',
+  USER_DEACTIVATE: 'DEACTIVATE_USER',
+  USER_RESET_PASSWORD: 'RESET_PASSWORD',
+  USER_ROLE_CHANGE: 'ROLE_CHANGE',
+  USER_DEPARTMENT_CHANGE: 'DEPARTMENT_CHANGE',
+  USER_MANAGER_CHANGE: 'MANAGER_CHANGE',
+
+  // Roles
+  ROLE_CREATE: 'ROLE_CREATE',
+  ROLE_UPDATE: 'ROLE_UPDATE',
+  ROLE_DELETE: 'ROLE_DELETE',
+  ROLE_CLONE: 'ROLE_CLONE',
+  ROLE_ACTIVATE: 'ROLE_ACTIVATE',
+  ROLE_DEACTIVATE: 'ROLE_DEACTIVATE',
+  ROLE_ASSIGN_PERMISSIONS: 'ROLE_ASSIGN_PERMISSIONS',
+
+  // Assistants
+  ASSISTANT_CREATE: 'ASSISTANT_CREATE',
+  ASSISTANT_UPDATE: 'ASSISTANT_UPDATE',
+  ASSISTANT_DELETE: 'ASSISTANT_DELETE',
+  ASSISTANT_ACTIVATE: 'ASSISTANT_ACTIVATE',
+  ASSISTANT_DEACTIVATE: 'ASSISTANT_DEACTIVATE',
+  ASSISTANT_RESET_PASSWORD: 'ASSISTANT_RESET_PASSWORD',
+  ASSISTANT_GRANT_PERMISSIONS: 'ASSISTANT_GRANT_PERMISSIONS',
+  ASSISTANT_REVOKE_PERMISSIONS: 'ASSISTANT_REVOKE_PERMISSIONS',
+
+  // Auth / session
+  AUTH_LOGIN: 'AUTH_LOGIN',
+  AUTH_LOGOUT: 'AUTH_LOGOUT',
+} as const;
+
+export type AuditActionKey = (typeof AUDIT)[keyof typeof AUDIT];
+
+export const ENTITY = {
+  USER: 'user',
+  ROLE: 'role',
+  ASSISTANT: 'assistant',
+  PERMISSION: 'permission',
+  AUTH: 'auth',
+} as const;
