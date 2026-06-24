@@ -1,0 +1,38 @@
+# Dependencies & build output — reinstalled / recompiled inside the image
+node_modules
+dist
+build
+coverage
+
+# Secrets & local env — MUST NOT be baked into the image
+.env
+.env.*
+!.env.example
+
+# Version control & Docker meta
+.git
+.gitignore
+.dockerignore
+dockerfile
+Dockerfile*
+docker-compose*.yml
+.github
+
+# Tests
+test
+**/*.spec.ts
+**/*.e2e-spec.ts
+
+# Caches, logs & build info
+.npm
+.eslintcache
+*.tsbuildinfo
+*.log
+npm-debug.log*
+
+# Editor / OS cruft
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+README.md

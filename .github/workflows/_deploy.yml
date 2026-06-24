@@ -1,0 +1,145 @@
+name: _deploy (reusable)
+
+# Reusable build+deploy pipeline. Called by deploy-prod.yml / deploy-dev.yml.
+# All AWS config comes from the GitHub *Environment* named by `environment`
+# (Settings -> Environments). No long-lived AWS keys are stored — auth is via
+# OIDC, and the app's own secrets (DB URL, JWT) live in the .env ON the EC2 box.
+#
+# Required Environment variables (vars.*):
+#   AWS_REGION       e.g. ap-south-1
+#   AWS_ROLE_ARN     arn:aws:iam::<acct>:role/<github-oidc-role>
+#   ECR_REPOSITORY   e.g. maven-backend
+#   EC2_INSTANCE_ID  i-0123456789abcdef0
+#   DEPLOY_PATH      (optional) defaults to /opt/maven-backend
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment to read config from (production / development)
+        required: true
+        type: string
+      tag-prefix:
+        description: Image tag prefix (prod / dev)
+        required: true
+        type: string
+      env-file:
+        description: Env file to load on the instance (.env for prod, .env.dev for dev)
+        required: false
+        default: .env
+        type: string
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build & push to ECR
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          REG="${{ steps.ecr.outputs.registry }}"
+          REPO="${{ vars.ECR_REPOSITORY }}"
+          PREFIX="${{ inputs.tag-prefix }}"
+          echo "image=${REG}/${REPO}:${PREFIX}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest=${REG}/${REPO}:${PREFIX}-latest" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2 via SSM
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Trigger deploy on the instance (SSM Run Command)
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image }}
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          REGION: ${{ vars.AWS_REGION }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/maven-backend' }}
+          ENV_FILE: ${{ inputs.env-file }}
+          PROJECT: maven-${{ inputs.tag-prefix }}
+        run: |
+          set -euo pipefail
+
+          REGISTRY="${IMAGE_URI%%/*}"   # strip "/repo:tag" -> registry host only
+
+          # The script that runs ON the EC2 instance (as root, via SSM agent).
+          # --env-file selects the env used for ${...} interpolation in the compose
+          # file (HOST_PORT, IMAGE_URI); the service's own env_file: injects app vars
+          # (DB/JWT) into the container. COMPOSE_PROJECT_NAME isolates prod vs dev so
+          # both can coexist on one box without clashing.
+          REMOTE=$(cat <<EOF
+          set -e
+          aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${REGISTRY}
+          cd ${DEPLOY_PATH}
+          export IMAGE_URI="${IMAGE_URI}"
+          export COMPOSE_PROJECT_NAME="${PROJECT}"
+          docker compose --env-file ${ENV_FILE} -f docker-compose.prod.yml pull
+          docker compose --env-file ${ENV_FILE} -f docker-compose.prod.yml up -d --remove-orphans
+          docker image prune -f
+          EOF
+          )
+
+          # Build the SSM parameters payload (one array entry per line).
+          jq -n --arg s "$REMOTE" '{commands: ($s | split("\n"))}' > ssm-params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy ${IMAGE_URI}" \
+            --parameters file://ssm-params.json \
+            --query "Command.CommandId" --output text)
+          echo "SSM command: $CMD_ID"
+
+          # `wait` exits non-zero on a failed command — handle the status ourselves.
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query Status --output text)
+          echo "----- stdout -----"
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query StandardOutputContent --output text
+          echo "Deploy status: $STATUS"
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "----- stderr -----"
+            aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query StandardErrorContent --output text
+            echo "::error::Deploy failed with status $STATUS"
+            exit 1
+          fi

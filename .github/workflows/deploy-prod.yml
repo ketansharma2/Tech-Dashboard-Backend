@@ -1,0 +1,26 @@
+name: Deploy · production
+
+# Pushing to `main` ships to the production EC2 instance.
+# NOTE: you are currently on branch `main_omkar` — change `main` below to your
+# real production branch (or rename your branch to `main`).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # allows manual re-deploys + rollbacks from the Actions tab
+
+# Don't run two prod deploys at once; let an in-flight one finish (no cancel).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: production
+      tag-prefix: prod
+      env-file: .env

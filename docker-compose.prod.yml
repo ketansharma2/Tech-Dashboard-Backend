@@ -1,0 +1,39 @@
+# Maven Jobs backend — PRODUCTION compose (runs ON the EC2 instance).
+#
+# Unlike docker-compose.yml (which builds locally), this file PULLS a pre-built
+# image from ECR. CI/CD sets IMAGE_URI and runs (see _deploy.yml):
+#
+#   IMAGE_URI=<acct>.dkr.ecr.<region>.amazonaws.com/maven-dashboard/production:prod-<sha> \
+#   COMPOSE_PROJECT_NAME=maven-prod \
+#     docker compose --env-file .env -f docker-compose.prod.yml up -d
+#
+# This file lives in /opt/maven-backend on the instance alongside the env files:
+#   .env       -> production   (deploy-prod.yml, branch main)
+#   .env.dev   -> development  (deploy-dev.yml,  branch dev)
+# The env file supplies app SECRETS (DB URL, JWT, CORS) — NOT the ports, which are
+# fixed below. IMAGE_URI is required — there is no `build:` here.
+services:
+  backend:
+    image: ${IMAGE_URI:?IMAGE_URI must be set (the ECR image to deploy)}
+    # Project-scoped name so prod (maven-prod) and dev (maven-dev) don't collide
+    # if they ever run on the same box.
+    container_name: ${COMPOSE_PROJECT_NAME:-maven}-backend
+    restart: unless-stopped
+    init: true # forward SIGTERM for a clean shutdown of the pg pool
+    env_file:
+      - ${ENV_FILE:-.env}
+    # Ports are fixed here, not pulled from .env. The app listens on 8080 inside
+    # the container (PORT=8080 baked into the image) and is published on host 5000.
+    # Keep PORT OUT of the env file, or it would override the image default.
+    ports:
+      - '5000:8080' # host:container (external:internal) — clients hit :5000
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:8080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
