@@ -1,14 +1,3 @@
-# Maven Jobs backend — multi-stage Alpine production image (NestJS + Prisma 7).
-#
-# Stage 1 (builder): full deps + build toolchain, compile TS, generate client.
-# Stage 2 (runner) : copies the already-built, prod-only node_modules + dist.
-#
-# Alpine notes (musl libc, not glibc):
-#   * Prisma's query engine links OpenSSL  -> `apk add openssl`.
-#   * bcrypt is a native addon with no musl prebuilt -> it compiles from source,
-#     which needs python3/make/g++ in the BUILDER only. We copy the compiled
-#     node_modules into the runner so the final image carries no compilers.
-
 # ----------------------------------------------------------------------------
 # Stage 1 — builder
 # ----------------------------------------------------------------------------
@@ -31,22 +20,16 @@ RUN npx prisma generate
 COPY . .
 RUN npm run build
 
-# Drop dev dependencies in place, then regenerate the client so it survives in
-# the pruned tree. `prisma` (CLI) + `dotenv` are prod deps, so they remain.
-RUN npm prune --omit=dev && npx prisma generate
-
 # ----------------------------------------------------------------------------
 # Stage 2 — runner
 # ----------------------------------------------------------------------------
 FROM node:24-alpine AS runner
 ENV NODE_ENV=production
-# Internal port baked into the image (NOT read from .env). main.ts honors $PORT.
-# Compose publishes this on host 5000 (ports: '5000:8080').
-ENV PORT=8080
 WORKDIR /app
 
-# Runtime shared libs: openssl for Prisma, libstdc++ for the compiled bcrypt addon.
-RUN apk add --no-cache openssl libstdc++
+# Runtime libs: openssl (Prisma), libstdc++ (compiled bcrypt addon),
+# tini (PID 1 init — reaps zombies + forwards SIGTERM/SIGINT for clean shutdown).
+RUN apk add --no-cache openssl libstdc++ tini
 
 # Bring over the already-built, prod-only deps (incl. compiled bcrypt + the
 # generated Prisma client) — no reinstall, no recompile, no toolchain here.
@@ -59,10 +42,9 @@ COPY --from=builder /app/package.json ./
 # Drop root.
 USER node
 
-# Documented for readers / tooling; the app binds 0.0.0.0:$PORT (8080 in compose).
-EXPOSE 8080
-
-# Run pending migrations (unless RUN_MIGRATIONS=false), then start the server.
-# Inlined (no external entrypoint script to copy/maintain) and calling the local
-# prisma binary directly so it never tries to fetch the CLI at runtime.
-ENTRYPOINT ["sh", "-c", "if [ \"${RUN_MIGRATIONS:-true}\" = \"true\" ]; then echo 'Applying migrations...'; node_modules/.bin/prisma migrate deploy; fi; exec node dist/main"]
+# tini is PID 1 and forwards signals to the app for graceful shutdown. The script:
+#   - skips all DB work if RUN_MIGRATIONS is not "true"
+#   - else runs `migrate status` (read-only) and only calls `migrate deploy` when
+#     migrations are actually pending — no apply when the schema is already current
+#   - exec's node so it inherits PID and receives SIGTERM directly
+ENTRYPOINT ["/sbin/tini", "--", "sh", "-c", "set -e; if [ \"${RUN_MIGRATIONS:-true}\" = \"true\" ]; then echo '[entrypoint] Checking for pending migrations...'; if node_modules/.bin/prisma migrate status >/dev/null 2>&1; then echo '[entrypoint] Schema already up to date — skipping deploy.'; else echo '[entrypoint] Pending migrations — applying...'; node_modules/.bin/prisma migrate deploy; fi; else echo '[entrypoint] RUN_MIGRATIONS disabled — skipping migrations.'; fi; exec node dist/main"]
