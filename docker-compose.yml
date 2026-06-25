@@ -1,21 +1,14 @@
-#
-#   docker compose up -d --build      # build & start
-#   docker compose logs -f backend    # tail logs
-#   docker compose down               # stop & remove
-#
 services:
-  maven-dashboard:
-    build:
-      context: .
-      dockerfile: dockerfile
-    image: maven-dashboard-backend:latest
+  backend:
+    image: ${IMAGE_URI:-maven-dashboard-backend:latest}
     container_name: maven-dashboard-backend
     restart: unless-stopped
-    init: true # forward SIGTERM for a clean shutdown of the pg pool
+    environment:
+      RUN_MIGRATIONS: 'false'
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     ports:
-      - 5000:5000 # host:container (external:internal) — clients hit :5000
+      - '5000:5000'
     healthcheck:
       test:
         - CMD

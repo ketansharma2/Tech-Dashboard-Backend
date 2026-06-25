@@ -1,0 +1,201 @@
+name: Deploy to production
+
+# Push to main → test → build & push image to ECR → SSH to EC2 → sync compose →
+# migrate (gated) → swap → readiness-check → roll back on failure.
+# Manual runs allowed via the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write 
+  contents: read
+
+jobs:
+  test:
+    name: Lint, build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+  # 2) Build & push image to ECR -----------------------------------------------
+  build-and-push:
+    environment: production
+    name: Build & push to ECR
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tags (latest + commit SHA)
+        id: meta
+        run: |
+          REG="${{ steps.ecr.outputs.registry }}"
+          REPO="${{ vars.ECR_REPOSITORY }}"
+          echo "image=${REG}/${REPO}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest=${REG}/${REPO}:latest" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 3) Deploy to EC2 over SSH ---------------------------------------------------
+  deploy:
+    name: Deploy to EC2 (SSH)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ vars.EC2_HOST }}
+          EC2_HOST_KEY: ${{ vars.EC2_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key when provided (prevents first-connect MITM, CHANGELOG L2);
+          # otherwise fall back to trust-on-first-use via keyscan.
+          if [ -n "${EC2_HOST_KEY:-}" ]; then
+            printf '%s\n' "$EC2_HOST_KEY" >> ~/.ssh/known_hosts
+            echo "SSH_STRICT=yes" >> "$GITHUB_ENV"
+          else
+            ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "SSH_STRICT=accept-new" >> "$GITHUB_ENV"
+          fi
+
+      - name: Sync compose file to server
+        env:
+          EC2_HOST: ${{ vars.EC2_HOST }}
+          EC2_USER: ${{ vars.EC2_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking="$SSH_STRICT" \
+            "$EC2_USER@$EC2_HOST" 'mkdir -p /opt/maven-backend'
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking="$SSH_STRICT" \
+            docker-compose.yml "$EC2_USER@$EC2_HOST:/opt/maven-backend/docker-compose.yml"
+
+      - name: Migrate (gated), swap, readiness-check & roll back on failure
+        env:
+          EC2_HOST: ${{ vars.EC2_HOST }}
+          EC2_USER: ${{ vars.EC2_USER }}
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          # IMAGE_URI / AWS_REGION are expanded locally and passed as $1/$2 to the
+          # remote bash; the heredoc is quoted so nothing else expands on the runner.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking="$SSH_STRICT" \
+            "$EC2_USER@$EC2_HOST" 'bash -s' "$IMAGE_URI" "$AWS_REGION" <<'REMOTE'
+          set -euo pipefail
+          IMAGE_URI="$1"
+          AWS_REGION="$2"
+          REGISTRY="${IMAGE_URI%%/*}"
+          CONTAINER="maven-dashboard-backend"   # must match container_name in docker-compose.yml
+          COMPOSE="docker compose -f docker-compose.yml"
+          cd /opt/maven-backend
+
+          export COMPOSE_PROJECT_NAME=maven-prod
+
+          # Readiness probe: hits /health/ready which verifies DB connectivity, so a
+          # deploy is only "healthy" if the app can actually serve traffic. (CHANGELOG M1)
+          health_ok() {
+            for _ in $(seq 1 30); do
+              if curl -fsS http://localhost:5000/health/ready >/dev/null 2>&1; then return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+
+          # Remember the currently running image so we can roll back if the new one
+          # fails its health check. Inspect the REAL container name. (CHANGELOG C2)
+          PREV_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || true)"
+
+          echo "==> Logging in to ECR ($REGISTRY)"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+          export IMAGE_URI
+
+          echo "==> Pulling $IMAGE_URI (no downtime yet)"
+          $COMPOSE pull
+
+          # --- Gated migrations BEFORE the swap (CHANGELOG H1) ----------------------
+          # Run migrations as a one-shot using the new image. If they fail we abort
+          # here, leaving the current running app untouched — no partial deploy.
+          echo "==> Applying database migrations (one-shot)"
+          if ! docker run --rm --env-file .env -e RUN_MIGRATIONS=true \
+                 --entrypoint sh "$IMAGE_URI" \
+                 -c 'node_modules/.bin/prisma migrate deploy'; then
+            echo "Migration FAILED — aborting deploy, current app left running."
+            exit 1
+          fi
+
+          echo "==> Starting new container"
+          $COMPOSE up -d --remove-orphans
+
+          echo "==> Waiting for readiness on http://localhost:5000/health/ready"
+          if health_ok; then
+            docker image prune -af --filter "until=168h" >/dev/null 2>&1 || true
+            echo "Deployed and healthy: $IMAGE_URI"
+            exit 0
+          fi
+
+          # --- Rollback (CHANGELOG C2) ---------------------------------------------
+          echo "Readiness check FAILED."
+          if [ -n "$PREV_IMAGE" ]; then
+            echo "==> Rolling back to $PREV_IMAGE"
+            IMAGE_URI="$PREV_IMAGE" $COMPOSE up -d --remove-orphans
+            if health_ok; then
+              echo "Rolled back to $PREV_IMAGE and healthy. Deploy marked as FAILED."
+              exit 1
+            fi
+            echo "CRITICAL: rollback to $PREV_IMAGE is ALSO unhealthy. Manual intervention required."
+            exit 1
+          fi
+          echo "CRITICAL: no previous image recorded — cannot roll back. Service may be down."
+          exit 1
+          REMOTE

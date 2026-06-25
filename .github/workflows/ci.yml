@@ -1,11 +1,7 @@
 name: CI
 
-# Quality gate. Runs on every PR and on pushes to the long-lived branches.
-# Does NOT touch AWS — it only proves the code lints, generates, builds & tests.
 on:
   pull_request:
-  push:
-    branches: [main, dev]
 
 # Cancel superseded runs on the same ref to save minutes.
 concurrency:
