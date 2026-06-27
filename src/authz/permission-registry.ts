@@ -28,6 +28,7 @@ const A = {
   assign: { action: 'assign', label: 'Assign' },
   approve: { action: 'approve', label: 'Approve' },
   export: { action: 'export', label: 'Export' },
+  manageTargets: { action: 'manage_targets', label: 'Manage Targets for' },
 } as const;
 
 export const PERMISSION_MODULES: ModuleDef[] = [
@@ -37,6 +38,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { module: 'task', label: 'Tasks', actions: [A.view, A.create, A.edit, A.delete, A.assign, A.approve] },
   { module: 'project', label: 'Projects', actions: [A.view, A.create, A.edit, A.delete, A.assign] },
   { module: 'report', label: 'Reports', actions: [A.view, A.export] },
+  { module: 'performance', label: 'Team Performance', actions: [A.view, A.manageTargets] },
   { module: 'audit', label: 'Audit Logs', actions: [A.view, A.export] },
   { module: 'settings', label: 'Settings', actions: [A.view, A.edit] },
 ];
@@ -82,6 +84,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
     ...keys('task', ['view', 'create', 'edit', 'delete', 'assign', 'approve']),
     ...keys('project', ['view', 'create', 'edit', 'delete', 'assign']),
     ...keys('report', ['view', 'export']),
+    ...keys('performance', ['view', 'manage_targets']),
     ...keys('audit', ['view']),
     ...keys('settings', ['view']),
   ],
@@ -91,6 +94,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
     ...keys('task', ['view', 'create', 'edit', 'assign', 'approve']),
     ...keys('project', ['view', 'create', 'edit']),
     ...keys('report', ['view']),
+    ...keys('performance', ['view', 'manage_targets']),
     ...keys('audit', ['view']),
   ],
   LEAD: [
@@ -99,6 +103,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
     ...keys('task', ['view', 'create', 'edit', 'assign']),
     ...keys('project', ['view', 'edit']),
     ...keys('report', ['view']),
+    ...keys('performance', ['view']),
   ],
   ASSOCIATE: [
     ...keys('task', ['view', 'edit']),

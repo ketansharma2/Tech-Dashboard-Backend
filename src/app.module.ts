@@ -14,6 +14,7 @@ import { AuthzModule } from './authz/authz.module';
 import { RolesModule } from './roles/roles.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { AssistantsModule } from './assistants/assistants.module';
+import { PerformanceModule } from './performance/performance.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AssistantsModule } from './assistants/assistants.module';
     RolesModule,
     PermissionsModule,
     AssistantsModule,
+    PerformanceModule,
   ],
   controllers: [AppController],
   providers: [

@@ -34,6 +34,10 @@ export const AUDIT = {
   ASSISTANT_GRANT_PERMISSIONS: 'ASSISTANT_GRANT_PERMISSIONS',
   ASSISTANT_REVOKE_PERMISSIONS: 'ASSISTANT_REVOKE_PERMISSIONS',
 
+  // Performance targets
+  PERF_TARGET_SET: 'PERF_TARGET_SET',
+  PERF_TARGET_RESET: 'PERF_TARGET_RESET',
+
   // Auth / session
   AUTH_LOGIN: 'AUTH_LOGIN',
   AUTH_LOGOUT: 'AUTH_LOGOUT',
@@ -46,5 +50,6 @@ export const ENTITY = {
   ROLE: 'role',
   ASSISTANT: 'assistant',
   PERMISSION: 'permission',
+  KPI_TARGET: 'kpi_target',
   AUTH: 'auth',
 } as const;

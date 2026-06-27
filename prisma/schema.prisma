@@ -146,6 +146,9 @@ model User {
   auditActions  AuditLog[]    @relation("AuditActor")
   auditTargets  AuditLog[]    @relation("AuditTarget")
 
+  // KPI targets this user last edited (Team Performance Dashboard)
+  kpiTargetUpdates KpiTarget[] @relation("KpiTargetUpdatedBy")
+
   @@index([department])
   @@index([managerId])
   @@index([role])
@@ -192,6 +195,36 @@ model LoginEvent {
   @@index([userId])
   @@index([createdAt])
   @@map("login_events")
+}
+
+// ---------------------------------------------------------------------------
+// Team Performance Dashboard
+// Configurable KPI targets. One GLOBAL row (department null) + optional
+// per-DEPARTMENT overrides; a department value overrides global per-field, and
+// any null field falls back to global. GLOBAL uniqueness is enforced in the
+// service layer (Postgres treats NULLs as distinct in unique constraints).
+// ---------------------------------------------------------------------------
+
+enum TargetScope {
+  GLOBAL
+  DEPARTMENT
+}
+
+model KpiTarget {
+  id             String      @id @default(cuid())
+  scope          TargetScope
+  department     Department?
+  completionRate Int? // target completion rate (%)
+  onTimeRate     Int? // target on-time rate (%)
+  maxOverdue     Int? // max acceptable overdue task count
+  cycleTimeDays  Int? // target average cycle time (days)
+  updatedById    String?
+  updatedBy      User?       @relation("KpiTargetUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([scope, department])
+  @@map("kpi_targets")
 }
 
 model RefreshToken {
@@ -267,6 +300,8 @@ model Task {
   @@index([dueDate])
   @@index([status])
   @@index([priority])
+  @@index([completedAt])
+  @@index([assigneeId, completedAt])
   @@map("tasks")
 }
 
