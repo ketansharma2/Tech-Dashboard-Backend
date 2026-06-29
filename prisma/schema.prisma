@@ -134,9 +134,21 @@ model User {
   refreshTokens RefreshToken[]
 
   // Task relations
-  createdTasks  Task[]        @relation("TaskCreator")
-  assignedTasks Task[]        @relation("TaskAssignee")
-  taskComments  TaskComment[] @relation("TaskCommentAuthor")
+  createdTasks    Task[]        @relation("TaskCreator")
+  assignedTasks   Task[]        @relation("TaskAssignee")
+  assignedByTasks Task[]        @relation("TaskAssignedBy")
+  taskComments    TaskComment[] @relation("TaskCommentAuthor")
+
+  // Hierarchical task-tracking relations
+  taskAttachments     TaskAttachment[] @relation("TaskAttachmentUploadedBy")
+  taskAssignmentsFrom TaskAssignment[] @relation("TaskAssignmentFrom")
+  taskAssignmentsTo   TaskAssignment[] @relation("TaskAssignmentTo")
+  taskAssignmentsMade TaskAssignment[] @relation("TaskAssignmentActor")
+  taskActivities      TaskActivity[]   @relation("TaskActivityActor")
+  taskUpdates         TaskUpdate[]     @relation("TaskUpdateAuthor")
+  timeLogs            TimeLog[]        @relation("TimeLogUser")
+  blockersRaised      TaskBlocker[]    @relation("TaskBlockerRaisedBy")
+  blockersResolved    TaskBlocker[]    @relation("TaskBlockerResolvedBy")
 
   // Activity
   lastActiveAt  DateTime?
@@ -250,8 +262,44 @@ enum TaskPriority {
 enum TaskStatus {
   TODO
   IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  ON_HOLD
   COMPLETED
   CANCELLED
+}
+
+// Type of an entry in a task's append-only delegation trail.
+enum TaskAssignmentType {
+  ASSIGN           // first assignment of the task
+  REASSIGN         // same task handed to a different user (one level down)
+  DELEGATE_SUBTASK // a child subtask was created and assigned
+  AUTO_REASSIGN    // system reassigned (e.g. assignee was deactivated)
+}
+
+// Type of an entry in a task's per-task activity history feed.
+enum TaskActivityType {
+  CREATED
+  ASSIGNED
+  REASSIGNED
+  UNASSIGNED
+  STATUS_CHANGED
+  SUBMITTED_FOR_REVIEW
+  APPROVED
+  REJECTED
+  BLOCKED
+  UNBLOCKED
+  ON_HOLD
+  RESUMED
+  PROGRESS_UPDATE
+  COMMENT_ADDED
+  TIME_LOGGED
+  ATTACHMENT_ADDED
+  ATTACHMENT_REMOVED
+  DUE_DATE_CHANGED
+  PRIORITY_CHANGED
+  SUBTASK_ADDED
+  DELETED
 }
 
 model Task {
@@ -263,7 +311,12 @@ model Task {
   isCompleted Boolean      @default(false)
   isImportant Boolean      @default(false)
   isMyDay     Boolean      @default(false)
-  
+
+  // Hierarchical task tracking
+  progressPercent Int     @default(0)     // status-derived; BLOCKED/ON_HOLD keep the prior value
+  isBlocked       Boolean @default(false)  // denormalized from the active TaskBlocker for fast filtering
+  estimateMinutes Int?                     // optional effort estimate (for time-log comparison)
+
   // Dates
   dueDate     DateTime?
   dueTime     String?
@@ -271,37 +324,55 @@ model Task {
   completedAt DateTime?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-  
+
   // Relations
   creatorId   String
   creator     User         @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Cascade)
   assigneeId  String?
   assignee    User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  
+
+  // Who set the current assignee (the IN_REVIEW approver is resolved from the assignee's managerId)
+  assignedById String?
+  assignedBy   User?        @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  // Subtask tree (delegation by splitting work into children)
+  parentId    String?
+  parent      Task?        @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Task[]       @relation("TaskHierarchy")
+
   // Meeting related
   isMeeting         Boolean  @default(false)
   meetingUrl        String?
   meetingStartTime  String?
   meetingEndTime    String?
-  
+
   // Tags (stored as JSON array)
   tags      String[] @default([])
-  
+
   // Nested relations
   steps       TaskStep[]
   attachments TaskAttachment[]
   comments    TaskComment[]
-  
+  assignments TaskAssignment[]
+  activities  TaskActivity[]
+  updates     TaskUpdate[]
+  timeLogs    TimeLog[]
+  blockers    TaskBlocker[]
+
   @@index([creatorId])
   @@index([assigneeId])
+  @@index([assignedById])
+  @@index([parentId])
   @@index([isMyDay])
   @@index([isImportant])
   @@index([isCompleted])
+  @@index([isBlocked])
   @@index([dueDate])
   @@index([status])
   @@index([priority])
   @@index([completedAt])
   @@index([assigneeId, completedAt])
+  @@index([assigneeId, status])
   @@map("tasks")
 }
 
@@ -320,16 +391,20 @@ model TaskStep {
 }
 
 model TaskAttachment {
-  id         String   @id @default(cuid())
-  fileName   String
-  fileUrl    String
-  fileSize   Int
-  fileType   String
-  taskId     String
-  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  uploadedAt DateTime @default(now())
-  
+  id           String   @id @default(cuid())
+  fileName     String
+  fileUrl      String
+  fileSize     Int
+  fileType     String
+  storageKey   String?  // S3 object key (for presigned download / delete)
+  taskId       String
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedById String?
+  uploadedBy   User?    @relation("TaskAttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt   DateTime @default(now())
+
   @@index([taskId])
+  @@index([uploadedById])
   @@map("task_attachments")
 }
 
@@ -346,4 +421,97 @@ model TaskComment {
   @@index([taskId])
   @@index([authorId])
   @@map("task_comments")
+}
+
+// Append-only delegation trail: one row per (re)assignment hop of a task. Lets
+// the original assigner + every manager in the chain monitor a delegated task.
+model TaskAssignment {
+  id           String             @id @default(cuid())
+  taskId       String
+  task         Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fromUserId   String? // previous assignee (null on first assignment)
+  fromUser     User?              @relation("TaskAssignmentFrom", fields: [fromUserId], references: [id], onDelete: SetNull)
+  toUserId     String? // new assignee
+  toUser       User?              @relation("TaskAssignmentTo", fields: [toUserId], references: [id], onDelete: SetNull)
+  assignedById String? // actor who performed the (re)assignment
+  assignedBy   User?              @relation("TaskAssignmentActor", fields: [assignedById], references: [id], onDelete: SetNull)
+  type         TaskAssignmentType @default(ASSIGN)
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  @@index([taskId])
+  @@index([toUserId])
+  @@index([assignedById])
+  @@map("task_assignments")
+}
+
+// Per-task activity history feed (status changes, approvals, blockers, updates…).
+// This is the user-facing "what happened" log; sensitive actions are ALSO written
+// to the global AuditLog via AuditService.
+model TaskActivity {
+  id        String           @id @default(cuid())
+  taskId    String
+  task      Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?            @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type      TaskActivityType
+  summary   String
+  metadata  Json?
+  createdAt DateTime         @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([actorId])
+  @@map("task_activities")
+}
+
+// Dated, append-only progress notes the assignee posts (the "daily update" feed).
+model TaskUpdate {
+  id              String   @id @default(cuid())
+  taskId          String
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId        String?
+  author          User?    @relation("TaskUpdateAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  content         String
+  progressPercent Int? // optional progress snapshot at time of update
+  createdAt       DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+  @@map("task_updates")
+}
+
+// Time logged against a task (rolls up per task / per person / per subtree).
+model TimeLog {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?    @relation("TimeLogUser", fields: [userId], references: [id], onDelete: SetNull)
+  minutes   Int
+  note      String?
+  workDate  DateTime // the day the work was performed
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([userId, workDate])
+  @@map("time_logs")
+}
+
+// A first-class blocker raised against a task; surfaces on manager dashboards
+// until resolved. A task may have a history of blockers; isActive flags the open one(s).
+model TaskBlocker {
+  id           String    @id @default(cuid())
+  taskId       String
+  task         Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reason       String
+  isActive     Boolean   @default(true)
+  raisedById   String?
+  raisedBy     User?     @relation("TaskBlockerRaisedBy", fields: [raisedById], references: [id], onDelete: SetNull)
+  raisedAt     DateTime  @default(now())
+  resolvedById String?
+  resolvedBy   User?     @relation("TaskBlockerResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedAt   DateTime?
+
+  @@index([taskId, isActive])
+  @@map("task_blockers")
 }

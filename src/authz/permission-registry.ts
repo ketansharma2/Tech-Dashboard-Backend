@@ -35,7 +35,7 @@ export const PERMISSION_MODULES: ModuleDef[] = [
   { module: 'user', label: 'Users', actions: [A.view, A.create, A.edit, A.delete, A.assign] },
   { module: 'role', label: 'Roles', actions: [A.view, A.create, A.edit, A.delete, A.assign] },
   { module: 'assistant', label: 'Assistants', actions: [A.view, A.create, A.edit, A.delete, A.assign] },
-  { module: 'task', label: 'Tasks', actions: [A.view, A.create, A.edit, A.delete, A.assign, A.approve] },
+  { module: 'task', label: 'Tasks', actions: [A.view, A.create, A.edit, A.delete, A.assign, A.approve, A.export] },
   { module: 'project', label: 'Projects', actions: [A.view, A.create, A.edit, A.delete, A.assign] },
   { module: 'report', label: 'Reports', actions: [A.view, A.export] },
   { module: 'performance', label: 'Team Performance', actions: [A.view, A.manageTargets] },
@@ -81,7 +81,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
     ...keys('user', ['view', 'create', 'edit', 'assign']),
     ...keys('role', ['view']),
     ...keys('assistant', ['view', 'create', 'edit', 'delete', 'assign']),
-    ...keys('task', ['view', 'create', 'edit', 'delete', 'assign', 'approve']),
+    ...keys('task', ['view', 'create', 'edit', 'delete', 'assign', 'approve', 'export']),
     ...keys('project', ['view', 'create', 'edit', 'delete', 'assign']),
     ...keys('report', ['view', 'export']),
     ...keys('performance', ['view', 'manage_targets']),
@@ -91,7 +91,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
   HOD: [
     ...keys('user', ['view']),
     ...keys('assistant', ['view', 'create', 'edit', 'assign']),
-    ...keys('task', ['view', 'create', 'edit', 'assign', 'approve']),
+    ...keys('task', ['view', 'create', 'edit', 'delete', 'assign', 'approve', 'export']),
     ...keys('project', ['view', 'create', 'edit']),
     ...keys('report', ['view']),
     ...keys('performance', ['view', 'manage_targets']),
@@ -100,13 +100,15 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, string[] | 'ALL'> = {
   LEAD: [
     ...keys('user', ['view']),
     ...keys('assistant', ['view', 'create', 'edit', 'assign']),
-    ...keys('task', ['view', 'create', 'edit', 'assign']),
+    // LEAD approves their own direct reports' tasks (assignee's managerId == LEAD).
+    ...keys('task', ['view', 'create', 'edit', 'delete', 'assign', 'approve', 'export']),
     ...keys('project', ['view', 'edit']),
     ...keys('report', ['view']),
     ...keys('performance', ['view']),
   ],
   ASSOCIATE: [
-    ...keys('task', ['view', 'edit']),
+    // Associates can create/manage their own personal tasks (no assign/approve).
+    ...keys('task', ['view', 'create', 'edit', 'delete', 'export']),
     ...keys('project', ['view']),
     ...keys('report', ['view']),
   ],
